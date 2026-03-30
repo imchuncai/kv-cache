@@ -1,0 +1,13 @@
+# Compiled binaries
+test
+bench
+shard_sim
+node_server
+node_server_nb
+net_bench
+nb_bench
+dist_bench
+
+# Object files
+*.o
+*.dSYM/
