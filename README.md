@@ -4,31 +4,37 @@ A from-scratch key-value cache in C that explores the design decisions behind Re
 
 Built as a learning project to answer: **why is Redis designed the way it is?**
 
-## What's Inside
+## Project Structure
 
-| File | Description |
-|---|---|
-| `kv_cache.h/c` | Core LRU cache — hash map (FNV-1a) + doubly-linked list, O(1) get/put/delete |
-| `shard.h/c` | Consistent hash ring with configurable vnodes and replication factor |
-| `node_server.c` | Blocking TCP server (one client at a time) |
-| `node_server_nb.c` | Non-blocking TCP server using kqueue (macOS), handles many clients concurrently |
-| `test.c` | Correctness tests for the cache |
-| `bench.c` | Single-threaded vs multi-threaded benchmarks (reads, writes, mixed) |
-| `shard_sim.c` | Shard simulation — vnode tuning, replication vs data survival, CAP tradeoffs |
-| `net_bench.c` | In-process vs TCP reads (proves network is the bottleneck) |
-| `nb_bench.c` | Blocking vs non-blocking server with 1/10/50 concurrent clients |
-| `dist_bench.c` | Distributed benchmark — 5 TCP server processes with hash ring routing |
+```
+include/
+├── kv_cache.h          # Core LRU cache — hash map (FNV-1a) + doubly-linked list
+└── shard.h             # Consistent hash ring with configurable vnodes and replication
+src/
+├── kv_cache.c          # O(1) get/put/delete with LRU eviction
+├── shard.c             # Consistent hashing implementation
+├── node_server.c       # Blocking TCP server (one client at a time)
+└── node_server_nb.c    # Non-blocking TCP server using kqueue (macOS)
+tests/
+└── test.c              # Correctness tests for the cache
+benchmarks/
+├── bench.c             # Single-threaded vs multi-threaded benchmarks
+├── shard_sim.c         # Shard simulation — vnode tuning, replication, CAP tradeoffs
+├── net_bench.c         # In-process vs TCP reads (proves network is the bottleneck)
+├── nb_bench.c          # Blocking vs non-blocking server with concurrent clients
+└── dist_bench.c        # Distributed benchmark — 5 TCP servers with hash ring routing
+```
 
 ## Build & Run
 
 ```bash
-make          # builds everything
-./test        # run correctness tests
-./bench       # single vs multi-threaded benchmarks
-./shard_sim   # consistent hashing + replication simulation
-./net_bench   # in-process vs network benchmark (starts/stops server automatically)
-./nb_bench    # blocking vs non-blocking server benchmark
-./dist_bench  # 5-node distributed shard benchmark
+make              # builds everything
+make test         # run correctness tests
+./build/bench     # single vs multi-threaded benchmarks
+./build/shard_sim # consistent hashing + replication simulation
+./build/net_bench # in-process vs network benchmark (starts/stops server automatically)
+./build/nb_bench  # blocking vs non-blocking server benchmark
+./build/dist_bench # 5-node distributed shard benchmark
 ```
 
 Requires macOS (uses `kqueue` for the non-blocking server). Tested on Apple Silicon.
@@ -90,9 +96,9 @@ Requires macOS (uses `kqueue` for the non-blocking server). Tested on Apple Sili
 
 1. **LRU makes every read a write** — `get()` must update the linked list, so reads can't be lock-free
 2. **Mutexes + multiple threads can be slower than single-threaded** — cache-line bouncing between cores costs more than the operation
-3. **Network I/O is 1000x slower than in-process** — adding CPU threads doesn't help when you're waiting 16μs for TCP on every request
+3. **Network I/O is 1000x slower than in-process** — adding CPU threads doesn't help when you're waiting 16us for TCP on every request
 4. **Non-blocking event loops maximize throughput** — the server never idles waiting for one client
 5. **Connection pooling doesn't eliminate per-request overhead** — it saves the TCP handshake, not the round-trip
-6. **More ports on one machine ≠ more parallelism** — same NIC, same kernel, same CPU
+6. **More ports on one machine != more parallelism** — same NIC, same kernel, same CPU
 7. **Consistent hashing minimizes redistribution** — only 1/N keys move when a shard goes down
 8. **Replication trades write amplification for fault tolerance** — RF=2 survives single shard failure with zero data loss

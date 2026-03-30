@@ -1,33 +1,63 @@
 CC      = cc
-CFLAGS  = -Wall -Wextra -O2 -std=c11
+CFLAGS  = -Wall -Wextra -O2 -std=c11 -Iinclude
+LDFLAGS =
+
+CORE    = src/kv_cache.c
+SHARD   = src/shard.c
+
+.PHONY: all test clean
 
 all: test bench shard_sim node_server node_server_nb net_bench dist_bench nb_bench
 
-test: test.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ test.c kv_cache.c
+# --- Tests ---
 
-bench: bench.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ bench.c kv_cache.c
+test: build/test
+	./build/test
 
-shard_sim: shard_sim.c shard.c kv_cache.c shard.h kv_cache.h
-	$(CC) $(CFLAGS) -o $@ shard_sim.c shard.c kv_cache.c
+build/test: tests/test.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ tests/test.c $(CORE)
 
-node_server: node_server.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ node_server.c kv_cache.c
+# --- Servers ---
 
-net_bench: net_bench.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ net_bench.c kv_cache.c
+build/node_server: src/node_server.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ src/node_server.c $(CORE)
 
-node_server_nb: node_server_nb.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ node_server_nb.c kv_cache.c
+build/node_server_nb: src/node_server_nb.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ src/node_server_nb.c $(CORE)
 
-dist_bench: dist_bench.c shard.c kv_cache.c shard.h kv_cache.h
-	$(CC) $(CFLAGS) -o $@ dist_bench.c shard.c kv_cache.c -lm
+node_server: build/node_server
+node_server_nb: build/node_server_nb
 
-nb_bench: nb_bench.c kv_cache.c kv_cache.h
-	$(CC) $(CFLAGS) -o $@ nb_bench.c kv_cache.c
+# --- Benchmarks ---
+
+build/bench: benchmarks/bench.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ benchmarks/bench.c $(CORE)
+
+build/shard_sim: benchmarks/shard_sim.c $(SHARD) $(CORE) include/shard.h include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ benchmarks/shard_sim.c $(SHARD) $(CORE)
+
+build/net_bench: benchmarks/net_bench.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ benchmarks/net_bench.c $(CORE)
+
+build/nb_bench: benchmarks/nb_bench.c $(CORE) include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ benchmarks/nb_bench.c $(CORE)
+
+build/dist_bench: benchmarks/dist_bench.c $(SHARD) $(CORE) include/shard.h include/kv_cache.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ benchmarks/dist_bench.c $(SHARD) $(CORE) -lm
+
+bench: build/bench
+shard_sim: build/shard_sim
+net_bench: build/net_bench
+nb_bench: build/nb_bench
+dist_bench: build/dist_bench
 
 clean:
-	rm -f test bench shard_sim node_server net_bench dist_bench
-
-.PHONY: all clean
+	rm -rf build
