@@ -1,6 +1,7 @@
 #include "kv_cache.h"
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 /* ── Doubly-linked list node (also the hash-map entry) ─────────────────── */
 
@@ -14,11 +15,17 @@ typedef struct node {
 
 /* ── Cache structure ───────────────────────────────────────────────────── */
 
+struct bucket {
+    pthread_mutex_t mu;
+    node_t *nodes;
+};
+
 struct kv_cache {
+    pthread_mutex_t mu;
     size_t   capacity;
     size_t   size;
     size_t   bucket_count;
-    node_t **buckets;       /* hash table (separate chaining) */
+    struct bucket *buckets; /* hash table (separate chaining) */
     node_t   head;          /* sentinel: head.next = MRU */
     node_t   tail;          /* sentinel: tail.prev = LRU */
 };
@@ -55,7 +62,7 @@ static void list_push_front(kv_cache_t *cache, node_t *n)
 
 static node_t *find_node(kv_cache_t *cache, const char *key, size_t bucket)
 {
-    for (node_t *n = cache->buckets[bucket]; n; n = n->hash_next)
+    for (node_t *n = cache->buckets[bucket].nodes; n; n = n->hash_next)
         if (strcmp(n->key, key) == 0)
             return n;
     return NULL;
@@ -63,7 +70,7 @@ static node_t *find_node(kv_cache_t *cache, const char *key, size_t bucket)
 
 static void remove_from_bucket(kv_cache_t *cache, node_t *n, size_t bucket)
 {
-    node_t **pp = &cache->buckets[bucket];
+    node_t **pp = &cache->buckets[bucket].nodes;
     while (*pp != n)
         pp = &(*pp)->hash_next;
     *pp = n->hash_next;
@@ -96,10 +103,15 @@ kv_cache_t *kv_cache_create(size_t capacity)
     kv_cache_t *c = calloc(1, sizeof(*c));
     if (!c) return NULL;
 
+    pthread_mutex_init(&c->mu, NULL);
     c->capacity     = capacity;
     c->bucket_count = capacity * 2;   /* load factor ~0.5 */
-    c->buckets      = calloc(c->bucket_count, sizeof(node_t *));
+    c->buckets      = calloc(c->bucket_count, sizeof(*(c->buckets)));
     if (!c->buckets) { free(c); return NULL; }
+
+    for (size_t i = 0; i < c->bucket_count; i++) {
+        pthread_mutex_init(&c->buckets[i].mu, NULL);
+    }
 
     /* Wire sentinels */
     c->head.next = &c->tail;
@@ -154,14 +166,86 @@ bool kv_cache_put(kv_cache_t *cache, const char *key, const char *value)
     }
 
     /* Insert into hash table */
-    n->hash_next = cache->buckets[bucket];
-    cache->buckets[bucket] = n;
+    n->hash_next = cache->buckets[bucket].nodes;
+    cache->buckets[bucket].nodes = n;
 
     /* Insert at front of LRU list */
     list_push_front(cache, n);
     cache->size++;
 
     return true;
+}
+
+bool kv_cache_mu_put(kv_cache_t *cache, const char *key, const char *value)
+{
+    size_t bucket = hash_key(key, cache->bucket_count);
+    struct bucket *b = &cache->buckets[bucket];
+    struct node *evict = NULL;
+
+    pthread_mutex_lock(&b->mu);
+    node_t *n = b->nodes;
+    while (n && strcmp(n->key, key)) {
+        n = n->hash_next;
+    }
+    if (n) {
+        char *new_val = strdup(value);
+        if (new_val == NULL)
+            goto unlock_exit_fail;
+
+        free(n->value);
+        n->value = new_val;
+
+        pthread_mutex_lock(&cache->mu);
+        if (n->next) {
+            list_remove(n);
+            list_push_front(cache, n);
+        }
+        pthread_mutex_unlock(&cache->mu);
+    } else {
+        n = malloc(sizeof(*n));
+        if (n == NULL)
+            goto unlock_exit_fail;
+
+        n->key  = strdup(key);
+        n->value = strdup(value);
+        if (!n->key || !n->value) {
+            free(n->key);
+            free(n->value);
+            free(n);
+            goto unlock_exit_fail;
+        }
+        /* Insert into hash table */
+        n->hash_next = b->nodes;
+        b->nodes = n;
+
+        pthread_mutex_lock(&cache->mu);
+        if (cache->size >= cache->capacity) {
+            evict = cache->tail.prev;
+            list_remove(evict);
+            evict->next = NULL;
+            cache->size--;
+        }
+        /* Insert at front of LRU list */
+        list_push_front(cache, n);
+        cache->size++;
+        pthread_mutex_unlock(&cache->mu);
+    }
+    pthread_mutex_unlock(&b->mu);
+    if (evict) {
+        size_t bucket = hash_key(evict->key, cache->bucket_count);
+        struct bucket *b = &cache->buckets[bucket];
+
+        pthread_mutex_lock(&b->mu);
+        remove_from_bucket(cache, evict, bucket);
+        pthread_mutex_unlock(&b->mu);
+
+        free_node(evict);
+    }
+    return true;
+
+unlock_exit_fail:
+    pthread_mutex_unlock(&b->mu);
+    return false;
 }
 
 const char *kv_cache_get(kv_cache_t *cache, const char *key)
@@ -174,6 +258,27 @@ const char *kv_cache_get(kv_cache_t *cache, const char *key)
     list_remove(n);
     list_push_front(cache, n);
     return n->value;
+}
+
+bool kv_cache_mu_get(kv_cache_t *cache, const char *key)
+{
+    size_t bucket = hash_key(key, cache->bucket_count);
+    struct bucket *b = &cache->buckets[bucket];
+    pthread_mutex_lock(&b->mu);
+    node_t *n = b->nodes;
+    while (n && strcmp(n->key, key)) {
+        n = n->hash_next;
+    }
+    if (n) {
+        pthread_mutex_lock(&cache->mu);
+        if (n->next) {
+            list_remove(n);
+            list_push_front(cache, n);
+        }
+        pthread_mutex_unlock(&cache->mu);
+    }
+    pthread_mutex_unlock(&b->mu);
+    return n;
 }
 
 const char *kv_cache_peek(kv_cache_t *cache, const char *key)

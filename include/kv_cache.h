@@ -25,6 +25,8 @@ void kv_cache_destroy(kv_cache_t *cache);
  */
 bool kv_cache_put(kv_cache_t *cache, const char *key, const char *value);
 
+bool kv_cache_mu_put(kv_cache_t *cache, const char *key, const char *value);
+
 /*
  * Retrieve the value for a key.
  * Returns a pointer to the internal value string (valid until the entry is
@@ -32,6 +34,8 @@ bool kv_cache_put(kv_cache_t *cache, const char *key, const char *value);
  * Accessing a key promotes it to most-recently-used.
  */
 const char *kv_cache_get(kv_cache_t *cache, const char *key);
+
+bool kv_cache_mu_get(kv_cache_t *cache, const char *key);
 
 /*
  * Retrieve the value for a key WITHOUT promoting it in the LRU list.

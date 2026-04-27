@@ -92,16 +92,12 @@ static void *worker(void *arg)
 
         if (rand_r(&seed) % 5 == 0) {
             rand_value(val, VAL_LEN, &seed);
-            pthread_mutex_lock(&cache_lock);
-            kv_cache_put(a->cache, key, val);
-            pthread_mutex_unlock(&cache_lock);
+            kv_cache_mu_put(a->cache, key, val);
         } else {
-            pthread_mutex_lock(&cache_lock);
-            if (kv_cache_get(a->cache, key))
+            if (kv_cache_mu_get(a->cache, key))
                 a->hits++;
             else
                 a->misses++;
-            pthread_mutex_unlock(&cache_lock);
         }
     }
     return NULL;
@@ -110,7 +106,8 @@ static void *worker(void *arg)
 static void bench_multi_threaded(void)
 {
     unsigned int seed = 100;
-    kv_cache_t *cache = kv_cache_create(CACHE_CAP);
+    // Note: thread always allocate node before evict, so reserve some memory
+    kv_cache_t *cache = kv_cache_create(CACHE_CAP - NUM_THREADS);
     char key[32], val[VAL_LEN];
 
     /* Pre-fill */
